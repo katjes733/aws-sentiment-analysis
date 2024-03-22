@@ -1,0 +1,17 @@
+env:
+  node: true
+  es2021: true
+extends: eslint:recommended
+parserOptions:
+  ecmaVersion: latest
+  sourceType: module
+rules: {}
+settings:
+  import/extensions:
+    - ".mjs"
+    - ".js"
+  import/resolver:
+    node:
+      extensions:
+        - ".mjs"
+        - ".js"

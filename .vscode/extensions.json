@@ -1,0 +1,12 @@
+{
+  "recommendations": [
+    "esbenp.prettier-vscode",
+    "hashicorp.terraform",
+    "dbaeumer.vscode-eslint",
+    "ms-python.vscode-pylance",
+    "ms-python.pylint",
+    "ms-python.python",
+    "ms-python.debugpy",
+    "njpwerner.autodocstring"
+  ]
+}
