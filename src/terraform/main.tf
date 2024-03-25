@@ -35,11 +35,16 @@ data "aws_partition" "current" {}
 
 data "aws_region" "current" {}
 
+data "aws_caller_identity" "current" {}
+
 locals {
-  is_arm_supported_region                        = contains(["us-east-1", "us-west-2", "eu-central-1", "eu-west-1", "ap-south-1", "ap-southeast-1", "ap-southeast-2", "ap-northeast-1"], data.aws_region.current.name)
-  unzip_files_lambda_function_name               = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}unzip-files"
-  remove_all_files_from_s3_lambda_function_name  = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}remove-all-files-from-s3"
-  get_comprehend_job_status_lambda_function_name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}get-comprehend-job-status"
+  is_arm_supported_region                          = contains(["us-east-1", "us-west-2", "eu-central-1", "eu-west-1", "ap-south-1", "ap-southeast-1", "ap-southeast-2", "ap-northeast-1"], data.aws_region.current.name)
+  unzip_files_lambda_function_name                 = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}unzip-files"
+  remove_all_files_from_s3_lambda_function_name    = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}remove-all-files-from-s3"
+  get_comprehend_job_status_lambda_function_name   = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}get-comprehend-job-status"
+  sentiment_analysis_prepare_data_glue_job_name    = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-prepare-data"
+  sentiment_analysis_prepare_results_glue_job_name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-prepare-results"
+  sentiment_analysis_state_machine_name            = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis"
 }
 
 resource "random_string" "unique_id" {
@@ -49,7 +54,7 @@ resource "random_string" "unique_id" {
 }
 
 resource "aws_s3_bucket" "sentiment_analysis_assets_bucket" {
-  bucket        = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-assets"
+  bucket        = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-assets-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
   force_destroy = true
 }
 
@@ -86,7 +91,7 @@ resource "aws_s3_object" "etl_job_script_prepare_results" {
 }
 
 resource "aws_s3_bucket" "sentiment_analysis_data_bucket" {
-  bucket        = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-data"
+  bucket        = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-data-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
   force_destroy = true
 }
 
@@ -318,14 +323,11 @@ resource "aws_iam_policy" "get_comprehend_job_status_lambda_role_policy" {
     Statement = [
       {
         Action = [
-          "s3:Get*",
-          "s3:List*",
-          "s3:Delete*"
+          "comprehend:DescribeSentimentDetectionJob"
         ]
         Effect = "Allow"
         Resource = [
-          "${aws_s3_bucket.sentiment_analysis_data_bucket.arn}",
-          "${aws_s3_bucket.sentiment_analysis_data_bucket.arn}/*"
+          "arn:aws:comprehend:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:sentiment-detection-job/*"
         ]
       },
     ]
@@ -394,9 +396,477 @@ resource "aws_iam_policy" "sentiment_analysis_glue_role_policy" {
         ]
         Effect = "Allow"
         Resource = [
-          "${aws_s3_bucket.sentiment_analysis_data_bucket.arn}/*"
+          "${aws_s3_bucket.sentiment_analysis_data_bucket.arn}/*",
+          "${aws_s3_bucket.sentiment_analysis_assets_bucket.arn}/*"
         ]
       },
     ]
   })
+}
+
+# ##################################################################################################
+# Resources for Glue Job to prepare data
+# ##################################################################################################
+
+resource "aws_cloudwatch_log_group" "sentiment_analysis_prepare_data_glue_job_log_group" {
+  name              = "/aws/lambda/${local.sentiment_analysis_prepare_data_glue_job_name}"
+  retention_in_days = 7
+}
+
+resource "aws_glue_job" "sentiment_analysis_prepare_data_glue_job" {
+  name     = local.sentiment_analysis_prepare_data_glue_job_name
+  role_arn = aws_iam_role.sentiment_analysis_glue_role.arn
+
+  glue_version      = "4.0"
+  number_of_workers = 10
+  worker_type       = "G.1X"
+
+  default_arguments = {
+    "--continuous-log-logGroup"          = aws_cloudwatch_log_group.sentiment_analysis_prepare_data_glue_job_log_group.name
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-continuous-log-filter"     = "true"
+    "--enable-metrics"                   = "true"
+    "--enable-observability-metrics"     = "true"
+    "--enable-glue-datacatalog"          = "true"
+    "--BUCKET"                           = aws_s3_bucket.sentiment_analysis_data_bucket.id
+  }
+
+  command {
+    python_version  = "3"
+    script_location = "s3://${aws_s3_bucket.sentiment_analysis_assets_bucket.id}/prepare_data.py"
+  }
+}
+
+# ##################################################################################################
+# Resources for Glue Job to prepare results
+# ##################################################################################################
+
+resource "aws_cloudwatch_log_group" "sentiment_analysis_prepare_results_glue_job_log_group" {
+  name              = "/aws/lambda/${local.sentiment_analysis_prepare_results_glue_job_name}"
+  retention_in_days = 7
+}
+
+resource "aws_glue_job" "sentiment_analysis_prepare_results_glue_job" {
+  name     = local.sentiment_analysis_prepare_results_glue_job_name
+  role_arn = aws_iam_role.sentiment_analysis_glue_role.arn
+
+  glue_version      = "4.0"
+  number_of_workers = 10
+  worker_type       = "G.1X"
+
+  default_arguments = {
+    "--continuous-log-logGroup"          = aws_cloudwatch_log_group.sentiment_analysis_prepare_results_glue_job_log_group.name
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-continuous-log-filter"     = "true"
+    "--enable-metrics"                   = "true"
+    "--enable-observability-metrics"     = "true"
+    "--enable-glue-datacatalog"          = "true"
+    "--BUCKET"                           = aws_s3_bucket.sentiment_analysis_data_bucket.id
+  }
+
+  command {
+    python_version  = "3"
+    script_location = "s3://${aws_s3_bucket.sentiment_analysis_assets_bucket.id}/prepare_results.py"
+  }
+}
+
+# ##################################################################################################
+# Resources for Comprehend
+# ##################################################################################################
+
+resource "aws_iam_role" "sentiment_analysis_comprehend_role" {
+  name = var.resource_prefix != "" ? "${var.resource_prefix}sentiment-analysis-comprehend-role" : null
+  managed_policy_arns = [
+    aws_iam_policy.sentiment_analysis_comprehend_role_policy.arn
+  ]
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "comprehend.amazonaws.com"
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_policy" "sentiment_analysis_comprehend_role_policy" {
+  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-comprehend-role-policy"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+        Effect = "Allow"
+        Resource = [
+          "${aws_s3_bucket.sentiment_analysis_data_bucket.arn}/*"
+        ]
+      },
+      {
+        Action = [
+          "s3:ListBucket"
+        ]
+        Effect = "Allow"
+        Resource = [
+          "${aws_s3_bucket.sentiment_analysis_data_bucket.arn}"
+        ]
+      },
+    ]
+  })
+}
+
+# ##################################################################################################
+# Resources for State Machine to perform sentiment analysis
+# ##################################################################################################
+
+resource "aws_iam_role" "sentiment_analysis_state_machine_role" {
+  name = var.resource_prefix != "" ? "${var.resource_prefix}sentiment-analysis-state-machine-role" : null
+  managed_policy_arns = [
+    "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSGlueServiceRole",
+    aws_iam_policy.sentiment_analysis_state_machine_role_policy.arn
+  ]
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "states.amazonaws.com"
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_policy" "sentiment_analysis_state_machine_role_policy" {
+  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-state-machine-role-policy"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "events:PutTargets",
+          "events:DescribeRule",
+          "events:PutRule",
+          "glue:StartJobRun",
+          "glue:GetJobRun",
+          "ecs:DescribeTasks"
+        ]
+        Effect = "Allow"
+        Resource = [
+          "arn:aws:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/*/*",
+          "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:job/*",
+          "arn:aws:ecs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:task/*/*"
+        ]
+      },
+      {
+        Action = [
+          "iam:PassRole",
+          "lambda:InvokeFunction",
+          "comprehend:StartSentimentDetectionJob"
+        ]
+        Effect = "Allow"
+        Resource = [
+          aws_iam_role.sentiment_analysis_comprehend_role.arn,
+          "arn:aws:comprehend:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:sentiment-detection-job/*",
+          aws_lambda_function.remove_all_files_from_s3_lambda.arn,
+          aws_lambda_function.unzip_files_lambda.arn,
+          aws_lambda_function.get_comprehend_job_status_lambda.arn
+        ]
+      },
+      {
+        Action = [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords",
+          "xray:GetSamplingRules",
+          "xray:GetSamplingTargets"
+        ]
+        Effect = "Allow"
+        Resource = [
+          "*"
+        ]
+      },
+    ]
+  })
+}
+
+resource "aws_sfn_state_machine" "sentiment_analysis_state_machine" {
+  name     = local.sentiment_analysis_state_machine_name
+  role_arn = aws_iam_role.sentiment_analysis_state_machine_role.arn
+
+  definition = <<EOF
+{
+  "Comment": "Sentiment Analysis",
+  "StartAt": "Remove Previous Data",
+  "States": {
+    "Remove Previous Data": {
+      "Type": "Parallel",
+      "Next": "Prepare Raw Data",
+      "Branches": [
+        {
+          "StartAt": "Remove Data (analyzed)",
+          "States": {
+            "Remove Data (analyzed)": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "FunctionName": "${aws_lambda_function.remove_all_files_from_s3_lambda.arn}",
+                "Payload": {
+                  "Bucket": "${aws_s3_bucket.sentiment_analysis_data_bucket.id}",
+                  "Prefix": "analyzed/"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Remove Data (prepared)",
+          "States": {
+            "Remove Data (prepared)": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "FunctionName": "${aws_lambda_function.remove_all_files_from_s3_lambda.arn}",
+                "Payload": {
+                  "Bucket": "${aws_s3_bucket.sentiment_analysis_data_bucket.id}",
+                  "Prefix": "prepared/"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Remove Data (results)",
+          "States": {
+            "Remove Data (results)": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "FunctionName": "${aws_lambda_function.remove_all_files_from_s3_lambda.arn}",
+                "Payload": {
+                  "Bucket": "${aws_s3_bucket.sentiment_analysis_data_bucket.id}",
+                  "Prefix": "results/"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ]
+    },
+    "Prepare Raw Data": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${local.sentiment_analysis_prepare_data_glue_job_name}"
+      },
+      "Next": "Decompress Prepared Data"
+    },
+    "Decompress Prepared Data": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "${aws_lambda_function.unzip_files_lambda.arn}",
+        "Payload": {
+          "Bucket": "${aws_s3_bucket.sentiment_analysis_data_bucket.id}",
+          "Prefix": "prepared/"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Detect sentiment"
+    },
+    "Detect sentiment": {
+      "Type": "Task",
+      "Parameters": {
+        "DataAccessRoleArn": "${aws_iam_role.sentiment_analysis_comprehend_role.arn}",
+        "InputDataConfig": {
+          "S3Uri": "s3://${aws_s3_bucket.sentiment_analysis_data_bucket.id}/prepared/",
+          "InputFormat": "ONE_DOC_PER_LINE"
+        },
+        "LanguageCode": "en",
+        "OutputDataConfig": {
+          "S3Uri": "s3://${aws_s3_bucket.sentiment_analysis_data_bucket.id}/analyzed/"
+        },
+        "JobName.$": "States.Format('%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-{}', $$.Execution.Name)"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:comprehend:startSentimentDetectionJob",
+      "Next": "Wait 10 seconds",
+      "ResultSelector": {
+        "JobId.$": "$.JobId"
+      }
+    },
+    "Wait 10 seconds": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "Get Sentiment Job status"
+    },
+    "Get Sentiment Job status": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "${aws_lambda_function.get_comprehend_job_status_lambda.arn}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Sentiment Job done?",
+      "OutputPath": "$.Payload"
+    },
+    "Sentiment Job done?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.JobStatus",
+          "StringEquals": "FAILED",
+          "Next": "Sentiment Job Failed"
+        },
+        {
+          "Variable": "$.JobStatus",
+          "StringEquals": "COMPLETED",
+          "Next": "Decompress Analyzed Data"
+        }
+      ],
+      "Default": "Wait 10 seconds"
+    },
+    "Decompress Analyzed Data": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "${aws_lambda_function.unzip_files_lambda.arn}",
+        "Payload": {
+          "Bucket": "${aws_s3_bucket.sentiment_analysis_data_bucket.id}",
+          "Prefix": "analyzed/"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Prepare Final Data"
+    },
+    "Sentiment Job Failed": {
+      "Type": "Fail"
+    },
+    "Prepare Final Data": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${local.sentiment_analysis_prepare_results_glue_job_name}"
+      },
+      "Next": "Decompress Final Data"
+    },
+    "Decompress Final Data": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "${aws_lambda_function.unzip_files_lambda.arn}",
+        "Payload": {
+          "Bucket": "${aws_s3_bucket.sentiment_analysis_data_bucket.id}",
+          "Prefix": "results/"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true
+    }
+  }
+}
+EOF
 }
