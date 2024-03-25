@@ -21,7 +21,7 @@ terraform {
 
 provider "aws" {
   region  = var.aws_region
-  profile = "rearc_eng_playground"
+  profile = var.profile != "" ? var.profile : null
   default_tags {
     tags = {
       Owner = var.tag_owner
