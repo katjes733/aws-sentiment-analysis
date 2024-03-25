@@ -39,6 +39,8 @@ data "aws_caller_identity" "current" {}
 
 locals {
   is_arm_supported_region                          = contains(["us-east-1", "us-west-2", "eu-central-1", "eu-west-1", "ap-south-1", "ap-southeast-1", "ap-southeast-2", "ap-northeast-1"], data.aws_region.current.name)
+  etl_job_script_prepare_data_source_name          = "${path.module}/../python/etl-job-scripts/prepare_data.py"
+  etl_job_script_prepare_results_source_name       = "${path.module}/../python/etl-job-scripts/prepare_results.py"
   unzip_files_lambda_function_name                 = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}unzip-files"
   remove_all_files_from_s3_lambda_function_name    = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}remove-all-files-from-s3"
   get_comprehend_job_status_lambda_function_name   = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}get-comprehend-job-status"
@@ -79,14 +81,16 @@ resource "aws_s3_bucket_public_access_block" "sentiment_analysis_assets_bucket_b
 resource "aws_s3_object" "etl_job_script_prepare_data" {
   key                    = "prepare_data.py"
   bucket                 = aws_s3_bucket.sentiment_analysis_assets_bucket.id
-  source                 = "../python/etl-job-scripts/prepare_data.py"
+  source                 = local.etl_job_script_prepare_data_source_name
+  source_hash            = filemd5(local.etl_job_script_prepare_data_source_name)
   server_side_encryption = "AES256"
 }
 
 resource "aws_s3_object" "etl_job_script_prepare_results" {
   key                    = "prepare_results.py"
   bucket                 = aws_s3_bucket.sentiment_analysis_assets_bucket.id
-  source                 = "../python/etl-job-scripts/prepare_results.py"
+  source                 = local.etl_job_script_prepare_results_source_name
+  source_hash            = filemd5(local.etl_job_script_prepare_results_source_name)
   server_side_encryption = "AES256"
 }
 
