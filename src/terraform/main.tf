@@ -7,16 +7,6 @@ terraform {
   }
 
   required_version = ">= 1.7.5"
-
-  backend "s3" {
-    bucket         = "rearc-terraform-state-bucket-275279264324-us-east-1"
-    key            = "aws-sentiment-analysis/state/terraform.tfstate"
-    region         = "us-east-1"
-    encrypt        = true
-    kms_key_id     = "alias/rearc-terraform-state-bucket-key"
-    dynamodb_table = "rearc-terraform-state"
-    profile        = "rearc_eng_playground"
-  }
 }
 
 provider "aws" {
