@@ -705,32 +705,6 @@ resource "aws_sfn_state_machine" "sentiment_analysis_state_machine" {
       "Parameters": {
         "JobName": "${local.sentiment_analysis_prepare_data_glue_job_name}"
       },
-      "Next": "Decompress Prepared Data"
-    },
-    "Decompress Prepared Data": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "OutputPath": "$.Payload",
-      "Parameters": {
-        "FunctionName": "${aws_lambda_function.unzip_files_lambda.arn}",
-        "Payload": {
-          "Bucket": "${aws_s3_bucket.sentiment_analysis_data_bucket.id}",
-          "Prefix": "prepared/"
-        }
-      },
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException"
-          ],
-          "IntervalSeconds": 1,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
       "Next": "Detect sentiment"
     },
     "Detect sentiment": {
@@ -832,32 +806,6 @@ resource "aws_sfn_state_machine" "sentiment_analysis_state_machine" {
       "Parameters": {
         "JobName": "${local.sentiment_analysis_prepare_results_glue_job_name}"
       },
-      "Next": "Decompress Final Data"
-    },
-    "Decompress Final Data": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "OutputPath": "$.Payload",
-      "Parameters": {
-        "FunctionName": "${aws_lambda_function.unzip_files_lambda.arn}",
-        "Payload": {
-          "Bucket": "${aws_s3_bucket.sentiment_analysis_data_bucket.id}",
-          "Prefix": "results/"
-        }
-      },
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException"
-          ],
-          "IntervalSeconds": 1,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
       "End": true
     }
   }
