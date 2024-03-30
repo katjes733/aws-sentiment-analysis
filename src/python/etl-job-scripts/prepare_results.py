@@ -48,7 +48,6 @@ AmazonS3_node1710787564323 = glueContext.write_dynamic_frame.from_options(
     format="csv",
     connection_options={
         "path": f's3://{args["BUCKET"]}/results/',
-        "compression": "gzip",
         "partitionKeys": [],
     },
     transformation_ctx="AmazonS3_node1710787564323",
