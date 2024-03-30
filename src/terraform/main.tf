@@ -28,15 +28,19 @@ data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
 
 locals {
+  resource_prefix = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}"
+}
+
+locals {
   is_arm_supported_region                          = contains(["us-east-1", "us-west-2", "eu-central-1", "eu-west-1", "ap-south-1", "ap-southeast-1", "ap-southeast-2", "ap-northeast-1"], data.aws_region.current.name)
   etl_job_script_prepare_data_source_name          = "${path.module}/../python/etl-job-scripts/prepare_data.py"
   etl_job_script_prepare_results_source_name       = "${path.module}/../python/etl-job-scripts/prepare_results.py"
-  unzip_files_lambda_function_name                 = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}unzip-files"
-  remove_all_files_from_s3_lambda_function_name    = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}remove-all-files-from-s3"
-  get_comprehend_job_status_lambda_function_name   = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}get-comprehend-job-status"
-  sentiment_analysis_prepare_data_glue_job_name    = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-prepare-data"
-  sentiment_analysis_prepare_results_glue_job_name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-prepare-results"
-  sentiment_analysis_state_machine_name            = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis"
+  unzip_files_lambda_function_name                 = "${local.resource_prefix}unzip-files"
+  remove_all_files_from_s3_lambda_function_name    = "${local.resource_prefix}remove-all-files-from-s3"
+  get_comprehend_job_status_lambda_function_name   = "${local.resource_prefix}get-comprehend-job-status"
+  sentiment_analysis_prepare_data_glue_job_name    = "${local.resource_prefix}sentiment-analysis-prepare-data"
+  sentiment_analysis_prepare_results_glue_job_name = "${local.resource_prefix}sentiment-analysis-prepare-results"
+  sentiment_analysis_state_machine_name            = "${local.resource_prefix}sentiment-analysis"
 }
 
 resource "random_string" "unique_id" {
@@ -46,7 +50,7 @@ resource "random_string" "unique_id" {
 }
 
 resource "aws_s3_bucket" "sentiment_analysis_assets_bucket" {
-  bucket        = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-assets-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
+  bucket        = "${local.resource_prefix}sentiment-analysis-assets-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
   force_destroy = true
 }
 
@@ -85,7 +89,7 @@ resource "aws_s3_object" "etl_job_script_prepare_results" {
 }
 
 resource "aws_s3_bucket" "sentiment_analysis_data_bucket" {
-  bucket        = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-data-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
+  bucket        = "${local.resource_prefix}sentiment-analysis-data-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
   force_destroy = true
 }
 
@@ -156,7 +160,7 @@ resource "aws_iam_role" "unzip_files_lambda_role" {
 }
 
 resource "aws_iam_policy" "unzip_files_lambda_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}unzip-files-lambda-role-policy"
+  name = "${local.resource_prefix}unzip-files-lambda-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -240,7 +244,7 @@ resource "aws_iam_role" "remove_all_files_from_s3_lambda_role" {
 }
 
 resource "aws_iam_policy" "remove_all_files_from_s3_lambda_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}remove-all-files-from-s3-lambda-role-policy"
+  name = "${local.resource_prefix}remove-all-files-from-s3-lambda-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -311,7 +315,7 @@ resource "aws_iam_role" "get_comprehend_job_status_lambda_role" {
 }
 
 resource "aws_iam_policy" "get_comprehend_job_status_lambda_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}get-comprehend-job-status-lambda-role-policy"
+  name = "${local.resource_prefix}get-comprehend-job-status-lambda-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -379,7 +383,7 @@ resource "aws_iam_role" "sentiment_analysis_glue_role" {
 }
 
 resource "aws_iam_policy" "sentiment_analysis_glue_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-glue-role-policy"
+  name = "${local.resource_prefix}sentiment-analysis-glue-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -488,7 +492,7 @@ resource "aws_iam_role" "sentiment_analysis_comprehend_role" {
 }
 
 resource "aws_iam_policy" "sentiment_analysis_comprehend_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-comprehend-role-policy"
+  name = "${local.resource_prefix}sentiment-analysis-comprehend-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -516,6 +520,14 @@ resource "aws_iam_policy" "sentiment_analysis_comprehend_role_policy" {
 }
 
 # ##################################################################################################
+# Resources for glue data catalog
+# ##################################################################################################
+
+resource "aws_glue_catalog_database" "sentiment_analysis_catalog" {
+  name = "${local.resource_prefix}sentiment-analysis"
+}
+
+# ##################################################################################################
 # Resources for State Machine to perform sentiment analysis
 # ##################################################################################################
 
@@ -540,7 +552,7 @@ resource "aws_iam_role" "sentiment_analysis_state_machine_role" {
 }
 
 resource "aws_iam_policy" "sentiment_analysis_state_machine_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-state-machine-role-policy"
+  name = "${local.resource_prefix}sentiment-analysis-state-machine-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -719,7 +731,7 @@ resource "aws_sfn_state_machine" "sentiment_analysis_state_machine" {
         "OutputDataConfig": {
           "S3Uri": "s3://${aws_s3_bucket.sentiment_analysis_data_bucket.id}/analyzed/"
         },
-        "JobName.$": "States.Format('%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-{}', $$.Execution.Name)"
+        "JobName.$": "States.Format('${local.resource_prefix}sentiment-analysis-{}', $$.Execution.Name)"
       },
       "Resource": "arn:aws:states:::aws-sdk:comprehend:startSentimentDetectionJob",
       "Next": "Wait 10 seconds",
