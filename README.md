@@ -1,5 +1,7 @@
 # AWS Sentiment Analysis
 
+![End-to-End Sentiment Analysis with AWS](./images/Sentiment%20Analysis%20-%20Title%20Image.png)
+
 This is a simple but otherwise universally usable Proof of Concept [PoC] to showcase how to fully automate Sentiment analysis for customer reviews in AWS with.
 
 In this PoC, S3 is used as data lake, Glue as ETL tool of choice and Comprehend to perform the actual analysis. There are some Lambda functions that are used for cleanup and utility functionality. All these individual resources are stitched together with a Step function that orchestrates the complete sentiment analysis workflow.
@@ -21,3 +23,11 @@ Retain the results as necessary, as consecutive runs will delete all previous da
 **Note 1**: Make sure to remove the previous file from `s3://*sentiment-analysis-data*/input/` before uploading any other input data.
 
 **Note 2**: If the input file has a different schema (no columns `id` and `reviews.text`), it is necessary to either adjust the schema before uploading the file to the input bucket, or adjusting the script `src/python/etl-job-scripts/prepare_data.py` (`ChangeSchema` step) and applying the changes using Terraform.
+
+## Workflow
+
+![Workflow](./images/Sentiment%20Analysis%20-%20Workflow.png)
+
+## Architecture
+
+![Architecture](./images/Sentiment%20Analysis%20-%20Architecture.png)
