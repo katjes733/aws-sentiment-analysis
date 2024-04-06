@@ -1,42 +1,32 @@
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.41.0"
-    }
-  }
-
-  required_version = ">= 1.7.5"
-}
-
-provider "aws" {
-  region  = var.aws_region
-  profile = var.profile != "" ? var.profile : null
-  default_tags {
-    tags = {
-      Owner = var.tag_owner
-      Type  = var.tag_type
-      Usage = var.tag_usage
-    }
-  }
-}
-
 data "aws_partition" "current" {}
 
 data "aws_region" "current" {}
 
 data "aws_caller_identity" "current" {}
 
+data "aws_iam_role" "quicksight_service_role" {
+  name = "aws-quicksight-service-role-v0"
+}
+
+data "aws_iam_policy" "quicksight_athena_policy" {
+  name = "AWSQuicksightAthenaAccess"
+}
+
+locals {
+  resource_prefix = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}"
+}
+
 locals {
   is_arm_supported_region                          = contains(["us-east-1", "us-west-2", "eu-central-1", "eu-west-1", "ap-south-1", "ap-southeast-1", "ap-southeast-2", "ap-northeast-1"], data.aws_region.current.name)
   etl_job_script_prepare_data_source_name          = "${path.module}/../python/etl-job-scripts/prepare_data.py"
   etl_job_script_prepare_results_source_name       = "${path.module}/../python/etl-job-scripts/prepare_results.py"
-  unzip_files_lambda_function_name                 = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}unzip-files"
-  remove_all_files_from_s3_lambda_function_name    = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}remove-all-files-from-s3"
-  get_comprehend_job_status_lambda_function_name   = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}get-comprehend-job-status"
-  sentiment_analysis_prepare_data_glue_job_name    = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-prepare-data"
-  sentiment_analysis_prepare_results_glue_job_name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-prepare-results"
-  sentiment_analysis_state_machine_name            = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis"
+  unzip_files_lambda_function_name                 = "${local.resource_prefix}unzip-files"
+  remove_all_files_from_s3_lambda_function_name    = "${local.resource_prefix}remove-all-files-from-s3"
+  get_comprehend_job_status_lambda_function_name   = "${local.resource_prefix}get-comprehend-job-status"
+  get_crawler_run_status_lambda_function_name      = "${local.resource_prefix}get-crawler-run-status"
+  sentiment_analysis_prepare_data_glue_job_name    = "${local.resource_prefix}sentiment-analysis-prepare-data"
+  sentiment_analysis_prepare_results_glue_job_name = "${local.resource_prefix}sentiment-analysis-prepare-results"
+  sentiment_analysis_state_machine_name            = "${local.resource_prefix}sentiment-analysis"
 }
 
 resource "random_string" "unique_id" {
@@ -46,7 +36,7 @@ resource "random_string" "unique_id" {
 }
 
 resource "aws_s3_bucket" "sentiment_analysis_assets_bucket" {
-  bucket        = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-assets-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
+  bucket        = "${local.resource_prefix}sentiment-analysis-assets-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
   force_destroy = true
 }
 
@@ -85,7 +75,7 @@ resource "aws_s3_object" "etl_job_script_prepare_results" {
 }
 
 resource "aws_s3_bucket" "sentiment_analysis_data_bucket" {
-  bucket        = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-data-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
+  bucket        = "${local.resource_prefix}sentiment-analysis-data-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
   force_destroy = true
 }
 
@@ -131,6 +121,35 @@ resource "aws_s3_object" "folder_results" {
   content_type = "application/x-directory"
 }
 
+resource "aws_s3_bucket" "sentiment_analysis_temp_data_bucket" {
+  bucket        = "${local.resource_prefix}sentiment-analysis-temp-data-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "sentiment_analysis_temp_data_bucket_sse" {
+  bucket = aws_s3_bucket.sentiment_analysis_temp_data_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "sentiment_analysis_temp_data_bucket_block" {
+  bucket                  = aws_s3_bucket.sentiment_analysis_temp_data_bucket.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_object" "folder_athena_query_results" {
+  key          = "athena/query-results/"
+  bucket       = aws_s3_bucket.sentiment_analysis_temp_data_bucket.id
+  content_type = "application/x-directory"
+}
+
 # ##################################################################################################
 # Resources for unzip files lambda function
 # ##################################################################################################
@@ -156,7 +175,7 @@ resource "aws_iam_role" "unzip_files_lambda_role" {
 }
 
 resource "aws_iam_policy" "unzip_files_lambda_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}unzip-files-lambda-role-policy"
+  name = "${local.resource_prefix}unzip-files-lambda-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -240,7 +259,7 @@ resource "aws_iam_role" "remove_all_files_from_s3_lambda_role" {
 }
 
 resource "aws_iam_policy" "remove_all_files_from_s3_lambda_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}remove-all-files-from-s3-lambda-role-policy"
+  name = "${local.resource_prefix}remove-all-files-from-s3-lambda-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -311,7 +330,7 @@ resource "aws_iam_role" "get_comprehend_job_status_lambda_role" {
 }
 
 resource "aws_iam_policy" "get_comprehend_job_status_lambda_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}get-comprehend-job-status-lambda-role-policy"
+  name = "${local.resource_prefix}get-comprehend-job-status-lambda-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -350,8 +369,76 @@ resource "aws_lambda_function" "get_comprehend_job_status_lambda" {
   handler          = "get_comprehend_job_status.handler"
   runtime          = "nodejs20.x"
   memory_size      = 128
-  timeout          = 300
+  timeout          = 60
   role             = aws_iam_role.get_comprehend_job_status_lambda_role.arn
+}
+
+# ##################################################################################################
+# Resources for get crawler run status lambda function
+# ##################################################################################################
+
+resource "aws_iam_role" "get_crawler_run_status_lambda_role" {
+  name = var.resource_prefix != "" ? "${var.resource_prefix}get-crawler-run-status-lambda-role" : null
+  managed_policy_arns = [
+    "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+    aws_iam_policy.get_crawler_run_status_lambda_role_policy.arn
+  ]
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_policy" "get_crawler_run_status_lambda_role_policy" {
+  name = "${local.resource_prefix}get-crawler-run-status-lambda-role-policy"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "glue:GetCrawler"
+        ]
+        Effect = "Allow"
+        Resource = [
+          "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:crawler/*"
+        ]
+      },
+    ]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "get_crawler_run_status_lambda_log_group" {
+  name              = "/aws/lambda/${local.get_crawler_run_status_lambda_function_name}"
+  retention_in_days = 7
+}
+
+data "archive_file" "get_crawler_run_status_package" {
+  type        = "zip"
+  source_file = "${path.module}/../javascript/lambda/get_crawler_run_status.mjs"
+  output_path = "${path.module}/.package/get_crawler_run_status.zip"
+}
+
+resource "aws_lambda_function" "get_crawler_run_status_lambda" {
+  depends_on = [
+    aws_cloudwatch_log_group.get_crawler_run_status_lambda_log_group
+  ]
+  function_name    = local.get_crawler_run_status_lambda_function_name
+  architectures    = local.is_arm_supported_region ? ["arm64"] : ["x86_64"]
+  filename         = "${path.module}/.package/get_crawler_run_status.zip"
+  source_code_hash = data.archive_file.get_crawler_run_status_package.output_base64sha256
+  handler          = "get_crawler_run_status.handler"
+  runtime          = "nodejs20.x"
+  memory_size      = 128
+  timeout          = 60
+  role             = aws_iam_role.get_crawler_run_status_lambda_role.arn
 }
 
 # ##################################################################################################
@@ -379,7 +466,7 @@ resource "aws_iam_role" "sentiment_analysis_glue_role" {
 }
 
 resource "aws_iam_policy" "sentiment_analysis_glue_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-glue-role-policy"
+  name = "${local.resource_prefix}sentiment-analysis-glue-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -488,7 +575,7 @@ resource "aws_iam_role" "sentiment_analysis_comprehend_role" {
 }
 
 resource "aws_iam_policy" "sentiment_analysis_comprehend_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-comprehend-role-policy"
+  name = "${local.resource_prefix}sentiment-analysis-comprehend-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -516,6 +603,64 @@ resource "aws_iam_policy" "sentiment_analysis_comprehend_role_policy" {
 }
 
 # ##################################################################################################
+# Resources for glue data catalog population
+# ##################################################################################################
+
+resource "aws_glue_catalog_database" "sentiment_analysis_catalog_database" {
+  name = "${local.resource_prefix}sentiment-analysis-catalog-database"
+}
+
+resource "aws_iam_role" "sentiment_analysis_results_crawler_role" {
+  name = var.resource_prefix != "" ? "${var.resource_prefix}sentiment-analysis-results-crawler-role" : null
+  managed_policy_arns = [
+    "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSGlueServiceRole",
+    aws_iam_policy.sentiment_analysis_results_crawler_role_policy.arn
+  ]
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "glue.amazonaws.com"
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_policy" "sentiment_analysis_results_crawler_role_policy" {
+  name = "${local.resource_prefix}sentiment-analysis-results-crawler-role-policy"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+        Effect = "Allow"
+        Resource = [
+          "${aws_s3_bucket.sentiment_analysis_data_bucket.arn}/results/*"
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_glue_crawler" "sentiment_analysis_results_crawler" {
+  database_name = aws_glue_catalog_database.sentiment_analysis_catalog_database.name
+  table_prefix  = "${local.resource_prefix}sentiment-analysis-"
+  name          = "${local.resource_prefix}sentiment-analysis-results-crawler"
+  role          = aws_iam_role.sentiment_analysis_results_crawler_role.arn
+
+  s3_target {
+    path = "s3://${aws_s3_bucket.sentiment_analysis_data_bucket.id}/results/"
+  }
+}
+
+# ##################################################################################################
 # Resources for State Machine to perform sentiment analysis
 # ##################################################################################################
 
@@ -540,7 +685,7 @@ resource "aws_iam_role" "sentiment_analysis_state_machine_role" {
 }
 
 resource "aws_iam_policy" "sentiment_analysis_state_machine_role_policy" {
-  name = "%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-state-machine-role-policy"
+  name = "${local.resource_prefix}sentiment-analysis-state-machine-role-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -564,7 +709,8 @@ resource "aws_iam_policy" "sentiment_analysis_state_machine_role_policy" {
         Action = [
           "iam:PassRole",
           "lambda:InvokeFunction",
-          "comprehend:StartSentimentDetectionJob"
+          "comprehend:StartSentimentDetectionJob",
+          "glue:StartCrawler"
         ]
         Effect = "Allow"
         Resource = [
@@ -572,7 +718,9 @@ resource "aws_iam_policy" "sentiment_analysis_state_machine_role_policy" {
           "arn:aws:comprehend:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:sentiment-detection-job/*",
           aws_lambda_function.remove_all_files_from_s3_lambda.arn,
           aws_lambda_function.unzip_files_lambda.arn,
-          aws_lambda_function.get_comprehend_job_status_lambda.arn
+          aws_lambda_function.get_comprehend_job_status_lambda.arn,
+          aws_lambda_function.get_crawler_run_status_lambda.arn,
+          "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:crawler/*",
         ]
       },
       {
@@ -719,15 +867,15 @@ resource "aws_sfn_state_machine" "sentiment_analysis_state_machine" {
         "OutputDataConfig": {
           "S3Uri": "s3://${aws_s3_bucket.sentiment_analysis_data_bucket.id}/analyzed/"
         },
-        "JobName.$": "States.Format('%{if var.resource_prefix != ""}${var.resource_prefix}%{else}${random_string.unique_id}-%{endif}sentiment-analysis-{}', $$.Execution.Name)"
+        "JobName.$": "States.Format('${local.resource_prefix}sentiment-analysis-{}', $$.Execution.Name)"
       },
       "Resource": "arn:aws:states:::aws-sdk:comprehend:startSentimentDetectionJob",
-      "Next": "Wait 10 seconds",
+      "Next": "Wait 10 seconds for Comprehend",
       "ResultSelector": {
         "JobId.$": "$.JobId"
       }
     },
-    "Wait 10 seconds": {
+    "Wait 10 seconds for Comprehend": {
       "Type": "Wait",
       "Seconds": 10,
       "Next": "Get Sentiment Job status"
@@ -769,7 +917,7 @@ resource "aws_sfn_state_machine" "sentiment_analysis_state_machine" {
           "Next": "Decompress Analyzed Data"
         }
       ],
-      "Default": "Wait 10 seconds"
+      "Default": "Wait 10 seconds for Comprehend"
     },
     "Decompress Analyzed Data": {
       "Type": "Task",
@@ -806,6 +954,67 @@ resource "aws_sfn_state_machine" "sentiment_analysis_state_machine" {
       "Parameters": {
         "JobName": "${local.sentiment_analysis_prepare_results_glue_job_name}"
       },
+      "Next": "Start Crawler"
+    },
+    "Start Crawler": {
+      "Type": "Task",
+      "Parameters": {
+        "Name": "${aws_glue_crawler.sentiment_analysis_results_crawler.name}"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+      "Next": "Wait 10 seconds for Crawler"
+    },
+    "Wait 10 seconds for Crawler": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "Get Crawler Run Status"
+    },
+    "Get Crawler Run Status": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "${aws_lambda_function.get_crawler_run_status_lambda.arn}",
+        "Payload": {
+          "CrawlerName": "${aws_glue_crawler.sentiment_analysis_results_crawler.name}"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Crawler Run done?"
+    },
+    "Crawler Run done?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.CrawlStatus",
+          "StringEquals": "RUNNING",
+          "Next": "Wait 10 seconds for Crawler"
+        },
+        {
+          "Variable": "$.CrawlStatus",
+          "StringEquals": "SUCCEEDED",
+          "Next": "Go to End"
+        }
+      ],
+      "Default": "Crawler Job Failed"
+    },
+    "Crawler Job Failed": {
+      "Type": "Fail"
+    },
+    "Go to End": {
+      "Type": "Pass",
       "End": true
     }
   }
