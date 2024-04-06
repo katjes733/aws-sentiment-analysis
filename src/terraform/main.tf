@@ -97,6 +97,11 @@ resource "aws_s3_bucket_public_access_block" "sentiment_analysis_data_bucket_blo
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_notification" "sentiment_analysis_data_bucket_notification" {
+  bucket      = aws_s3_bucket.sentiment_analysis_data_bucket.id
+  eventbridge = true
+}
+
 resource "aws_s3_object" "folder_input" {
   key          = "input/"
   bucket       = aws_s3_bucket.sentiment_analysis_data_bucket.id
