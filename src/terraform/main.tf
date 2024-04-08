@@ -666,6 +666,86 @@ resource "aws_glue_crawler" "sentiment_analysis_results_crawler" {
 }
 
 # ##################################################################################################
+# Resources for auto start
+# ##################################################################################################
+
+resource "aws_iam_role" "sentiment_analysis_event_target_role" {
+  name = var.resource_prefix != "" ? "${var.resource_prefix}sentiment-analysis-event-target-role" : null
+  managed_policy_arns = [
+    aws_iam_policy.sentiment_analysis_event_target_role_policy.arn
+  ]
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "events.amazonaws.com"
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_policy" "sentiment_analysis_event_target_role_policy" {
+  name = "${local.resource_prefix}sentiment-analysis-event-target-role-policy"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "states:StartExecution"
+        ]
+        Effect = "Allow"
+        Resource = [
+          aws_sfn_state_machine.sentiment_analysis_state_machine.arn
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "sentiment_analysis_event_rule" {
+  name           = "${local.resource_prefix}sentiment-analysis-event-rule"
+  description    = "Event rule to auto start sentiment analysis"
+  event_bus_name = "default"
+  state          = "ENABLED"
+
+  event_pattern = jsonencode({
+    source = ["aws.s3"],
+    detail-type = [
+      "Object Created"
+    ],
+    detail = {
+      bucket = {
+        name = [aws_s3_bucket.sentiment_analysis_data_bucket.bucket]
+      },
+      object = {
+        key = [{ prefix = "input/" }]
+      }
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "sentiment_analysis_event_target" {
+  rule      = aws_cloudwatch_event_rule.sentiment_analysis_event_rule.name
+  target_id = "${local.resource_prefix}sentiment-analysis-event-target"
+  arn       = aws_sfn_state_machine.sentiment_analysis_state_machine.arn
+  role_arn  = aws_iam_role.sentiment_analysis_event_target_role.arn
+  input_transformer {
+    input_paths = {
+      skipKey = "$.detail.object.key",
+    }
+    input_template = <<EOF
+{
+  "skipKey": "<skipKey>"
+}
+EOF
+  }
+}
+
+# ##################################################################################################
 # Resources for State Machine to perform sentiment analysis
 # ##################################################################################################
 
@@ -758,9 +838,9 @@ resource "aws_sfn_state_machine" "sentiment_analysis_state_machine" {
       "Next": "Prepare Raw Data",
       "Branches": [
         {
-          "StartAt": "Remove Data (analyzed)",
+          "StartAt": "Remove Data (input)",
           "States": {
-            "Remove Data (analyzed)": {
+            "Remove Data (input)": {
               "Type": "Task",
               "Resource": "arn:aws:states:::lambda:invoke",
               "OutputPath": "$.Payload",
@@ -768,7 +848,9 @@ resource "aws_sfn_state_machine" "sentiment_analysis_state_machine" {
                 "FunctionName": "${aws_lambda_function.remove_all_files_from_s3_lambda.arn}",
                 "Payload": {
                   "Bucket": "${aws_s3_bucket.sentiment_analysis_data_bucket.id}",
-                  "Prefix": "analyzed/"
+                  "Prefix": "input/",
+                  "SkipKeys.$": "States.Array($.skipKey)",
+                  "SkipIfNoSkipKeys": "true"
                 }
               },
               "Retry": [
@@ -800,6 +882,37 @@ resource "aws_sfn_state_machine" "sentiment_analysis_state_machine" {
                 "Payload": {
                   "Bucket": "${aws_s3_bucket.sentiment_analysis_data_bucket.id}",
                   "Prefix": "prepared/"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Remove Data (analyzed)",
+          "States": {
+            "Remove Data (analyzed)": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "FunctionName": "${aws_lambda_function.remove_all_files_from_s3_lambda.arn}",
+                "Payload": {
+                  "Bucket": "${aws_s3_bucket.sentiment_analysis_data_bucket.id}",
+                  "Prefix": "analyzed/"
                 }
               },
               "Retry": [

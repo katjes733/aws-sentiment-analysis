@@ -7,11 +7,25 @@ import {
 const client = new S3Client({});
 
 export const handler = async (event) => {
-  console.log(`Bucket: ${event.Bucket}, Prefix: ${event.Prefix}`);
+  const bucket = event.Bucket;
+  const prefix = event.Prefix;
+  const skipKeys = event.SkipKeys?.filter((k) => k.trim()) ?? [];
+  const skipIfNoSkipKeys =
+    event.SkipIfNoSkipKeys?.toLowerCase() === "true" ? true : false;
+
+  console.log(
+    `Bucket: ${bucket}, Prefix: ${prefix}, SkipKeys: ${skipKeys}, SkipIfNoSkipKeys: ${skipIfNoSkipKeys}`
+  );
+
+  if (skipKeys.length === 0 && skipIfNoSkipKeys) {
+    return {
+      ObjectsDeleted: [],
+    };
+  }
 
   const listObjectsRequest = new ListObjectsV2Command({
-    Bucket: event.Bucket,
-    Prefix: event.Prefix ?? "/",
+    Bucket: bucket,
+    Prefix: prefix ?? "/",
   });
 
   try {
@@ -22,7 +36,9 @@ export const handler = async (event) => {
       const { Contents, IsTruncated, NextContinuationToken } =
         await client.send(listObjectsRequest);
       objectsToDelete.push(
-        ...Contents.filter((c) => c.Key !== event.Prefix).map((c) => c.Key)
+        ...Contents.filter(
+          (c) => c.Key !== prefix && !skipKeys.includes(c.Key)
+        ).map((c) => c.Key)
       );
       isTruncated = IsTruncated;
       listObjectsRequest.input.ContinuationToken = NextContinuationToken;
@@ -42,7 +58,7 @@ export const handler = async (event) => {
 
       while (objectsToDelete.length > 0) {
         const deleteObjectsRequest = new DeleteObjectsCommand({
-          Bucket: event.Bucket,
+          Bucket: bucket,
           Delete: {
             Objects: objectsToDelete.splice(0, 1000).map((o) => {
               return { Key: `${o}` };
@@ -61,8 +77,16 @@ export const handler = async (event) => {
         } from S3 bucket. Deleted objects:`
       );
       console.log(objectsDeleted.join("\n"));
+
+      return {
+        ObjectsDeleted: objectsDeleted,
+      };
     } else {
       console.log("No objects to delete");
+
+      return {
+        ObjectsDeleted: [],
+      };
     }
   } catch (err) {
     console.error(err);
@@ -71,9 +95,4 @@ export const handler = async (event) => {
       body: JSON.stringify({ Error: err.name, Message: err.message }),
     };
   }
-
-  return {
-    statusCode: 200,
-    body: JSON.stringify({}),
-  };
 };
