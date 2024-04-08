@@ -14,7 +14,9 @@ No costs incur for the idle resources except of files in S3.
 
 In short, you upload an **unzipped** file with your customer reviews (some **zipped** samples can be found in `./samples` - it is recommended to begin with the smaller data set, which is a subset of the larger data set) to `s3://*sentiment-analysis-data*/input/`.
 
-Then you navigate to the state machine `*sentiment-analysis` and start a new execution without any `Input` (it is OK to leave the default `Input`).
+**Note**: You must not upload multiple files at once. This will trigger multiple executions and is not intended.
+
+The upload triggers the execution of the state machine `*sentiment-analysis` automatically. To start an execution manually with the existing data set, navigate to the state machine `*sentiment-analysis` and start a new execution without any `Input` (it is OK to leave the default `Input`).
 
 Finally, wait until the execution completes (which depends on the amount of data).
 The results will be available in `s3://*sentiment-analysis-results*/input/` and include a sentiment for each review.
