@@ -831,8 +831,25 @@ resource "aws_sfn_state_machine" "sentiment_analysis_state_machine" {
   definition = <<EOF
 {
   "Comment": "Sentiment Analysis",
-  "StartAt": "Remove Previous Data",
+  "StartAt": "Define Defaults",
   "States": {
+    "Define Defaults": {
+      "Type": "Pass",
+      "Next": "Apply Defaults",
+      "ResultPath": "$.inputDefaults",
+      "Parameters": {
+        "skipKey": ""
+      }
+    },
+    "Apply Defaults": {
+      "Type": "Pass",
+      "Next": "Remove Previous Data",
+      "ResultPath": "$.withDefaults",
+      "OutputPath": "$.withDefaults.args",
+      "Parameters": {
+        "args.$": "States.JsonMerge($.inputDefaults, $$.Execution.Input, false)"
+      }
+    },
     "Remove Previous Data": {
       "Type": "Parallel",
       "Next": "Prepare Raw Data",
