@@ -1,5 +1,6 @@
 import tarfile
 import gzip
+import zipfile
 from io import BytesIO
 import boto3
 import logging, os
@@ -30,7 +31,7 @@ def lambda_handler(event, context):
     try:
         s3_client = boto3.resource('s3')
         bucket = s3_client.Bucket(bucket_name)
-        archive_keys = list(filter(lambda k: k != event['Prefix'] and k.endswith('.gz'), (_.key for _ in bucket.objects.filter(Prefix=prefix))))
+        archive_keys = list(filter(lambda k: k != event['Prefix'] and (k.endswith('.gz') or k.endswith('.zip')), (_.key for _ in bucket.objects.filter(Prefix=prefix))))
 
         pathnames = []
         extracted = []
@@ -41,13 +42,17 @@ def lambda_handler(event, context):
 
             object = s3_client.Object(bucket_name, archive_key)
             bytes_object = object.get()['Body'].read()
-            try:
-                tar = tarfile.open(fileobj=BytesIO(bytes_object))
-                tar.extractall(path=tmp_pathname)
-            except Exception:
+            if archive_key.endswith('.tar.gz'):
+                with tarfile.open(fileobj=BytesIO(bytes_object)) as tar_file:
+                    tar_file.extractall(path=tmp_pathname)
+            elif archive_key.endswith('.gz'):
                 os.makedirs(tmp_pathname, exist_ok=True)
-                with open(os.path.join(tmp_pathname, Path(archive_key).stem), 'wb+') as file:
-                    file.write(gzip.decompress(bytes_object))
+                with open(os.path.join(tmp_pathname, Path(archive_key).stem), 'wb+') as gz_file:
+                    gz_file.write(gzip.decompress(bytes_object))
+            elif archive_key.endswith('.zip'):
+                os.makedirs(tmp_pathname, exist_ok=True)
+                with zipfile.ZipFile(BytesIO(bytes_object)) as zip_file:
+                    zip_file.extractall(path=tmp_pathname,members=list(filter(lambda k: not k.startswith('__MACOSX'), zip_file.namelist())))
 
             count = 0
             for filename in os.listdir(tmp_pathname):
